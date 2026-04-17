@@ -13,6 +13,10 @@
  *       -o gmm_server -ltirpc -lpthread
  */
 
+extern "C" {
+#include "global_meta.h"
+}
+
 #include "global_meta_management.h"
 
 #include <cstdio>
@@ -46,7 +50,7 @@ static void server_init() {
 /* ══════════════════════════════════════════════════════════════════
  * 过程 1: gmm_insert_1_svc
  * ══════════════════════════════════════════════════════════════════ */
-gmm_status_result *
+extern "C" gmm_status_result *
 gmm_insert_1_svc(gmm_kv_arg argp, [[maybe_unused]] struct svc_req *rqstp)
 {
     static gmm_status_result res;
@@ -63,7 +67,7 @@ gmm_insert_1_svc(gmm_kv_arg argp, [[maybe_unused]] struct svc_req *rqstp)
 /* ══════════════════════════════════════════════════════════════════
  * 过程 2: gmm_query_1_svc
  * ══════════════════════════════════════════════════════════════════ */
-gmm_query_result *
+extern "C" gmm_query_result *
 gmm_query_1_svc(gmm_key_arg argp, [[maybe_unused]] struct svc_req *rqstp)
 {
     static gmm_query_result res;
@@ -88,7 +92,7 @@ gmm_query_1_svc(gmm_key_arg argp, [[maybe_unused]] struct svc_req *rqstp)
 /* ══════════════════════════════════════════════════════════════════
  * 过程 3: gmm_update_1_svc
  * ══════════════════════════════════════════════════════════════════ */
-gmm_status_result *
+extern "C" gmm_status_result *
 gmm_update_1_svc(gmm_kv_arg argp, [[maybe_unused]] struct svc_req *rqstp)
 {
     static gmm_status_result res;
@@ -105,7 +109,7 @@ gmm_update_1_svc(gmm_kv_arg argp, [[maybe_unused]] struct svc_req *rqstp)
 /* ══════════════════════════════════════════════════════════════════
  * 过程 4: gmm_remove_1_svc
  * ══════════════════════════════════════════════════════════════════ */
-gmm_status_result *
+extern "C" gmm_status_result *
 gmm_remove_1_svc(gmm_key_arg argp, [[maybe_unused]] struct svc_req *rqstp)
 {
     static gmm_status_result res;
