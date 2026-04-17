@@ -4,8 +4,9 @@
  * global_meta_client.h
  *
  * C++ client wrapper for the GlobalMetaManagement RPC interface.
- * Follows the same Status / Result<T> / batch* pattern as
- * metastore::RedisMetaStoreGlobalAdapter (see demo.cpp).
+ * Follows the same Status / Result<T> / batch* pattern as demo.cpp.
+ * No distinction between token-key and block-key; all operations use
+ * plain string keys and values.
  */
 
 extern "C" {
@@ -21,21 +22,22 @@ class GlobalMetaClient {
 public:
     explicit GlobalMetaClient(CLIENT *clnt);
 
-    // ── Single operations ───────────────────────────────────────────
-    Status         register_(const RegisterArgs &args) const;
-    Result<IpPair> query(const std::string &token_key) const;
-    Result<IpPair> query_block(const std::string &block_key) const;
-    Status         update(const UpdateArgs &args) const;
-    Status         remove(const std::string &token_key) const;
+    std::vector<Status>              batchInsertGlobal(const std::vector<std::string>& keys,
+                                                       const std::vector<std::string>& values) const;
 
-    // ── Batch operations ────────────────────────────────────────────
-    std::vector<Status>         batchInsertGlobal(const std::vector<RegisterArgs> &entries) const;
-    std::vector<Result<IpPair>> batchQueryGlobal(const std::vector<std::string> &token_keys) const;
-    std::vector<Result<IpPair>> batchQueryBlockGlobal(const std::vector<std::string> &block_keys) const;
-    std::vector<Status>         batchUpdateGlobal(const std::vector<UpdateArgs> &entries) const;
-    std::vector<Status>         batchDeleteGlobal(const std::vector<std::string> &token_keys) const;
+    std::vector<Result<std::string>> batchQueryGlobal(const std::vector<std::string>& keys) const;
+
+    std::vector<Status>              batchUpdateGlobal(const std::vector<std::string>& keys,
+                                                       const std::vector<std::string>& values) const;
+
+    std::vector<Status>              batchDeleteGlobal(const std::vector<std::string>& keys) const;
 
 private:
+    Status         rpc_insert(const std::string& key, const std::string& value) const;
+    Result<std::string> rpc_query(const std::string& key) const;
+    Status         rpc_update(const std::string& key, const std::string& new_value) const;
+    Status         rpc_remove(const std::string& key) const;
+
     Status rpc_status(gmm_status_result *res, const char *rpc_name) const;
 
     CLIENT *clnt_;

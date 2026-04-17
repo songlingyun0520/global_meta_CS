@@ -6,62 +6,74 @@
 
 #include "global_meta_management.h"
 
-Status GlobalMetaManagement::register_(const std::string &token_key,
-                                        const std::string &block_key,
-                                        const std::string &token_ip,
-                                        const std::string &block_ip) {
+std::vector<Status> GlobalMetaManagement::batchInsertGlobal(
+    const std::vector<std::string>& keys,
+    const std::vector<std::string>& values)
+{
     const std::lock_guard<std::mutex> guard(mutex_);
-    const auto old = global_map_.find(token_key);
-    if (old != global_map_.end()) {
-        block_index_.erase(old->second.block_key);
+    std::vector<Status> results;
+    results.reserve(keys.size());
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        if (store_.count(keys[i])) {
+            results.push_back(Status::error("already exists"));
+        } else {
+            store_[keys[i]] = values[i];
+            results.push_back(Status{});
+        }
     }
-    global_map_[token_key] = {block_key, token_ip, block_ip};
-    block_index_[block_key] = token_key;
-    return Status{};
+    return results;
 }
 
-Result<IpPair> GlobalMetaManagement::query(const std::string &token_key) const {
+std::vector<Result<std::string>> GlobalMetaManagement::batchQueryGlobal(
+    const std::vector<std::string>& keys) const
+{
     const std::lock_guard<std::mutex> guard(mutex_);
-    const auto it = global_map_.find(token_key);
-    if (it == global_map_.end()) {
-        return {{}, Status::error("not found")};
+    std::vector<Result<std::string>> results;
+    results.reserve(keys.size());
+    for (const auto& key : keys) {
+        const auto it = store_.find(key);
+        if (it == store_.end()) {
+            results.push_back({std::string{}, Status::error("not found")});
+        } else {
+            results.push_back({it->second, Status{}});
+        }
     }
-    return {IpPair{it->second.token_ip, it->second.block_ip}, Status{}};
+    return results;
 }
 
-Result<IpPair> GlobalMetaManagement::query_block(const std::string &block_key) const {
+std::vector<Status> GlobalMetaManagement::batchUpdateGlobal(
+    const std::vector<std::string>& keys,
+    const std::vector<std::string>& values)
+{
     const std::lock_guard<std::mutex> guard(mutex_);
-    const auto idx = block_index_.find(block_key);
-    if (idx == block_index_.end()) {
-        return {{}, Status::error("not found")};
+    std::vector<Status> results;
+    results.reserve(keys.size());
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const auto it = store_.find(keys[i]);
+        if (it == store_.end()) {
+            results.push_back(Status::error("not found"));
+        } else {
+            it->second = values[i];
+            results.push_back(Status{});
+        }
     }
-    const auto it = global_map_.find(idx->second);
-    if (it == global_map_.end()) {
-        return {{}, Status::error("not found")};
-    }
-    return {IpPair{it->second.token_ip, it->second.block_ip}, Status{}};
+    return results;
 }
 
-Status GlobalMetaManagement::remove(const std::string &token_key) {
+std::vector<Status> GlobalMetaManagement::batchDeleteGlobal(
+    const std::vector<std::string>& keys)
+{
     const std::lock_guard<std::mutex> guard(mutex_);
-    const auto it = global_map_.find(token_key);
-    if (it == global_map_.end()) {
-        return Status::error("not found");
+    std::vector<Status> results;
+    results.reserve(keys.size());
+    for (const auto& key : keys) {
+        const auto it = store_.find(key);
+        if (it == store_.end()) {
+            results.push_back(Status::error("not found"));
+        } else {
+            store_.erase(it);
+            results.push_back(Status{});
+        }
     }
-    block_index_.erase(it->second.block_key);
-    global_map_.erase(it);
-    return Status{};
-}
-
-Status GlobalMetaManagement::update(const std::string &token_key,
-                                     const std::string &new_token_ip,
-                                     const std::string &new_block_ip) {
-    const std::lock_guard<std::mutex> guard(mutex_);
-    const auto it = global_map_.find(token_key);
-    if (it == global_map_.end()) {
-        return Status::error("not found");
-    }
-    if (!new_token_ip.empty()) it->second.token_ip = new_token_ip;
-    if (!new_block_ip.empty()) it->second.block_ip = new_block_ip;
-    return Status{};
+    return results;
 }

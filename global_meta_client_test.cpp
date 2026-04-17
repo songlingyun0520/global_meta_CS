@@ -1,7 +1,7 @@
 /*
  * global_meta_client_test.cpp
  *
- * End-to-end demo for the GlobalMetaManagement RPC interface (skills.md §5.12).
+ * End-to-end demo for the GlobalMetaManagement RPC interface.
  * Interface and output style mirrors demo.cpp / metastore::RedisMetaStoreGlobalAdapter.
  *
  * Build (after rpcgen -N global_meta.x):
@@ -15,19 +15,12 @@
 
 #include "global_meta_client.h"
 
+#include <ctime>
 #include <iostream>
 #include <string>
 #include <vector>
 
 namespace {
-
-void PrintStatus(const std::string &step, const Status &status) {
-    std::cout << step << ": " << (status.ok() ? "OK" : "FAILED");
-    if (!status.ok()) {
-        std::cout << " (" << status.message() << ")";
-    }
-    std::cout << '\n';
-}
 
 void PrintBatchStatuses(const std::string &step,
                         const std::vector<Status> &statuses) {
@@ -44,14 +37,13 @@ void PrintBatchStatuses(const std::string &step,
 
 void PrintQueryResults(const std::string &step,
                        const std::vector<std::string> &keys,
-                       const std::vector<Result<IpPair>> &results) {
+                       const std::vector<Result<std::string>> &results) {
     std::cout << step << ":\n";
     for (std::size_t i = 0; i < results.size(); ++i) {
         const auto &r = results[i];
         std::cout << "  key=" << keys[i] << " -> ";
         if (r.ok()) {
-            std::cout << "token_ip=" << r.value.token_ip
-                      << " block_ip=" << r.value.block_ip;
+            std::cout << r.value;
         } else {
             std::cout << "FAILED (" << r.status.message() << ")";
         }
@@ -74,52 +66,52 @@ int main(int argc, char *argv[]) {
     }
 
     GlobalMetaClient client(clnt);
+    /* 打印当前连接到的服务端地址和 RPC program number，方便排查连接问题。 */
     std::cout << "[GMM Client] Connected to " << argv[1]
               << " (prog=0x20001235)\n\n";
 
-    // ── 场景 1: Prefill 阶段注册 ────────────────────────────────────────
-    const std::vector<RegisterArgs> entries = {
-        {"token:seq001", "block:blk001", "10.0.1.1", "10.1.1.1"},
-        {"token:seq002", "block:blk002", "10.0.1.2", "10.1.1.2"},
-        {"token:seq003", "block:blk003", "10.0.1.3", "10.1.1.3"},
+    /* 为本次测试生成唯一前缀，避免多次运行时和旧数据冲突。 */
+    const std::string prefix = "client_test:" + std::to_string(std::time(nullptr));
+    /* 这 3 个 key 会贯穿插入、查询、更新、删除整个测试流程。 */
+    const std::vector<std::string> keys = {
+        prefix + ":001",
+        prefix + ":002",
+        prefix + ":003"
     };
-    PrintBatchStatuses("batchInsertGlobal", client.batchInsertGlobal(entries));
+    const std::vector<std::string> values = {"10.0.1.1", "10.0.1.2", "10.0.1.3"};
+    /* 故意准备一个不存在的 key，用来验证失败分支。 */
+    const std::string missing_key = prefix + ":999";
 
-    // ── 场景 2: 按 TokenKey 查询 ─────────────────────────────────────────
-    const std::vector<std::string> token_keys = {
-        "token:seq001", "token:seq002", "token:seq999"
-    };
-    PrintQueryResults("batchQueryGlobal", token_keys,
-                      client.batchQueryGlobal(token_keys));
+    /* 打印本次测试使用的 key 前缀，便于和服务端日志对照。 */
+    std::cout << "[GMM Client] Test key prefix: " << prefix << "\n\n";
 
-    // ── 场景 3: 按 BlockKey 查询 ─────────────────────────────────────────
-    const std::vector<std::string> block_keys = {
-        "block:blk001", "block:blk003", "block:blk999"
-    };
-    PrintQueryResults("batchQueryBlockGlobal", block_keys,
-                      client.batchQueryBlockGlobal(block_keys));
+    /* 场景 1：批量插入。 */
+    PrintBatchStatuses("batchInsertGlobal",
+                       client.batchInsertGlobal(keys, values));
 
-    // ── 场景 4: 节点迁移 ─────────────────────────────────────────────────
-    const std::vector<UpdateArgs> updates = {
-        {"token:seq002", "10.0.2.2", ""},
-        {"token:seq003", "",         "10.1.2.3"},
-        {"token:seq999", "10.0.9.9", "10.1.9.9"},
-    };
-    PrintBatchStatuses("batchUpdateGlobal", client.batchUpdateGlobal(updates));
+    PrintQueryResults("batchQueryGlobal (after insert)",
+                      keys, client.batchQueryGlobal(keys));
+
+    /* 场景 2：重复插入，预期已存在的 key 返回失败。 */
+    PrintBatchStatuses("batchInsertGlobal (duplicate keys)",
+                       client.batchInsertGlobal({keys[0], keys[2]},
+                                                {"10.0.9.1", "10.0.9.3"}));
+
+    /* 场景 3：更新已存在 key，并验证不存在 key 的失败返回。 */
+    PrintBatchStatuses("batchUpdateGlobal",
+                       client.batchUpdateGlobal({keys[1], keys[2], missing_key},
+                                                {"10.0.2.2", "10.0.2.3", "10.0.9.9"}));
 
     PrintQueryResults("batchQueryGlobal (after update)",
-                      {"token:seq002", "token:seq003"},
-                      client.batchQueryGlobal({"token:seq002", "token:seq003"}));
+                      {keys[1], keys[2]},
+                      client.batchQueryGlobal({keys[1], keys[2]}));
 
-    // ── 场景 5: 删除映射 ─────────────────────────────────────────────────
+    /* 场景 4：删除已存在 key，并验证不存在 key 的失败返回。 */
     PrintBatchStatuses("batchDeleteGlobal",
-                       client.batchDeleteGlobal({"token:seq001", "token:seq003", "token:seq999"}));
+                       client.batchDeleteGlobal({keys[0], keys[1], keys[2], missing_key}));
 
-    const std::vector<std::string> all_keys = {
-        "token:seq001", "token:seq002", "token:seq003"
-    };
-    PrintQueryResults("batchQueryGlobal (after delete)", all_keys,
-                      client.batchQueryGlobal(all_keys));
+    PrintQueryResults("batchQueryGlobal (after delete)",
+                      keys, client.batchQueryGlobal(keys));
 
     clnt_destroy(clnt);
     std::cout << "\n>> All GlobalMetaManagement RPC calls completed\n";
