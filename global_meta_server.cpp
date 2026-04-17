@@ -8,26 +8,33 @@
  *
  * Build (after rpcgen -N global_meta.x):
  *   g++ -std=c++17 -Wall -O2 -I/usr/include/tirpc \
+ *       -Imodule1/module1/include -Imodule1/common \
  *       global_meta_svc.o global_meta_xdr.o \
- *       global_meta_management.o global_meta_server.o \
- *       -o gmm_server -ltirpc -lpthread
+ *       module1/common/metastore/redis_meta_store_backend.o \
+ *       module1/module1/src/redis_meta_store_global_adapter.o \
+ *       global_meta_server.o -o gmm_server -ltirpc -lpthread -lhiredis
  */
 
 extern "C" {
 #include "global_meta.h"
 }
 
-#include "global_meta_management.h"
+#include "metastore/meta_store_types.h"
+#include "metastore/redis_meta_store_global_adapter.h"
 
+#include <mutex>
 #include <cstdio>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
-GlobalMetaManagement g_gmm;
+metastore::RedisMetaStoreGlobalAdapter g_adapter;
+bool g_adapter_initialized = false;
+std::mutex g_adapter_mutex;
 
 // Returns current wall-clock time as "HH:MM:SS".
 std::string ts() {
@@ -37,6 +44,103 @@ std::string ts() {
     std::ostringstream oss;
     oss << std::put_time(tm_now, "%H:%M:%S");
     return oss.str();
+}
+
+metastore::MetaStoreInitOptions BuildAdapterOptions() {
+    metastore::MetaStoreInitOptions options;
+    options.backend = metastore::BackendKind::kRedis;
+    options.endpoint = "127.0.0.1:6379";
+    options.db_index = 0;
+    return options;
+}
+
+metastore::Status EnsureAdapterInitializedLocked() {
+    if (g_adapter_initialized) {
+        return metastore::Status::OK();
+    }
+
+    const metastore::MetaStoreInitOptions options = BuildAdapterOptions();
+    (void)g_adapter.reset();
+    const metastore::Status init_status = g_adapter.init(options);
+    if (init_status.ok()) {
+        g_adapter_initialized = true;
+        std::printf("[GMM Server] RedisMetaStoreGlobalAdapter init OK (%s, db=%d)\n",
+                    options.endpoint.c_str(), options.db_index);
+    } else {
+        std::printf("[GMM Server] RedisMetaStoreGlobalAdapter init failed: %s\n",
+                    init_status.message().c_str());
+    }
+    return init_status;
+}
+
+metastore::Status FirstStatusOrInternal(
+    const std::vector<metastore::Status>& statuses, const char* op_name) {
+    if (statuses.empty()) {
+        return metastore::Status::Internal(std::string(op_name) +
+                                           " returned no status");
+    }
+    return statuses.front();
+}
+
+metastore::Result<std::string> FirstResultOrInternal(
+    const std::vector<metastore::Result<std::string>>& results,
+    const char* op_name) {
+    if (results.empty()) {
+        return {metastore::Status::Internal(std::string(op_name) +
+                                            " returned no result"),
+                ""};
+    }
+    return results.front();
+}
+
+metastore::Status InsertOneGlobal(const std::string& key,
+                                  const std::string& value) {
+    const std::lock_guard<std::mutex> guard(g_adapter_mutex);
+    const metastore::Status init_status = EnsureAdapterInitializedLocked();
+    if (!init_status.ok()) {
+        return init_status;
+    }
+    return FirstStatusOrInternal(g_adapter.batchInsertGlobal({key}, {value}),
+                                 "batchInsertGlobal");
+}
+
+metastore::Result<std::string> QueryOneGlobal(const std::string& key) {
+    const std::lock_guard<std::mutex> guard(g_adapter_mutex);
+    const metastore::Status init_status = EnsureAdapterInitializedLocked();
+    if (!init_status.ok()) {
+        return {init_status, ""};
+    }
+    return FirstResultOrInternal(g_adapter.batchQueryGlobal({key}),
+                                 "batchQueryGlobal");
+}
+
+metastore::Status UpdateOneGlobal(const std::string& key,
+                                  const std::string& value) {
+    const std::lock_guard<std::mutex> guard(g_adapter_mutex);
+    const metastore::Status init_status = EnsureAdapterInitializedLocked();
+    if (!init_status.ok()) {
+        return init_status;
+    }
+    return FirstStatusOrInternal(g_adapter.batchUpdateGlobal({key}, {value}),
+                                 "batchUpdateGlobal");
+}
+
+metastore::Status DeleteOneGlobal(const std::string& key) {
+    const std::lock_guard<std::mutex> guard(g_adapter_mutex);
+    const metastore::Status init_status = EnsureAdapterInitializedLocked();
+    if (!init_status.ok()) {
+        return init_status;
+    }
+
+    const metastore::Result<std::string> existing =
+        FirstResultOrInternal(g_adapter.batchQueryGlobal({key}),
+                              "batchQueryGlobal");
+    if (!existing.ok()) {
+        return existing.status;
+    }
+
+    return FirstStatusOrInternal(g_adapter.batchDeleteGlobal({key}),
+                                 "batchDeleteGlobal");
 }
 
 }  // namespace
@@ -56,7 +160,7 @@ gmm_insert_1_svc(gmm_kv_arg argp, [[maybe_unused]] struct svc_req *rqstp)
     static gmm_status_result res;
     const std::string t = ts();
 
-    const Status status = g_gmm.batchInsertGlobal({argp.key}, {argp.value})[0];
+    const metastore::Status status = InsertOneGlobal(argp.key, argp.value);
     res.status = status.ok() ? 0 : -1;
     std::printf("[%s] INSERT  key=%-36s value=%-36s -> %s\n",
                 t.c_str(), argp.key, argp.value,
@@ -74,7 +178,7 @@ gmm_query_1_svc(gmm_key_arg argp, [[maybe_unused]] struct svc_req *rqstp)
     static std::string value_str;
     const std::string t = ts();
 
-    const Result<std::string> result = g_gmm.batchQueryGlobal({argp.key})[0];
+    const metastore::Result<std::string> result = QueryOneGlobal(argp.key);
     if (result.ok()) {
         res.found = 1;
         value_str = result.value;
@@ -98,7 +202,7 @@ gmm_update_1_svc(gmm_kv_arg argp, [[maybe_unused]] struct svc_req *rqstp)
     static gmm_status_result res;
     const std::string t = ts();
 
-    const Status status = g_gmm.batchUpdateGlobal({argp.key}, {argp.value})[0];
+    const metastore::Status status = UpdateOneGlobal(argp.key, argp.value);
     res.status = status.ok() ? 0 : -1;
     std::printf("[%s] UPDATE  key=%-36s new_value=%-36s -> %s\n",
                 t.c_str(), argp.key, argp.value,
@@ -115,7 +219,7 @@ gmm_remove_1_svc(gmm_key_arg argp, [[maybe_unused]] struct svc_req *rqstp)
     static gmm_status_result res;
     const std::string t = ts();
 
-    const Status status = g_gmm.batchDeleteGlobal({argp.key})[0];
+    const metastore::Status status = DeleteOneGlobal(argp.key);
     res.status = status.ok() ? 0 : -1;
     std::printf("[%s] REMOVE  key=%-36s -> %s\n",
                 t.c_str(), argp.key,
