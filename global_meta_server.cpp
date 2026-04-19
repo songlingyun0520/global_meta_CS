@@ -148,7 +148,7 @@ metastore::Status DeleteOneGlobal(const std::string& key) {
 __attribute__((constructor))
 static void server_init() {
     std::printf("[GMM Server] GlobalMetaManagement RPC 启动 (prog=0x20001235)\n");
-    std::printf("[GMM Server] 支持操作: insert / query / update / remove\n\n");
+    std::printf("[GMM Server] 支持操作嘻嘻: insert / query / update / remove\n\n");
 }
 
 /* ══════════════════════════════════════════════════════════════════
